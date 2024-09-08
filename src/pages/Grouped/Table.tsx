@@ -1,9 +1,5 @@
 import { revalidate } from "@solidjs/router";
-import {
-    type VirtualItem,
-    type VirtualizerOptions,
-    createVirtualizer,
-} from "@tanstack/solid-virtual";
+import { type VirtualItem, createVirtualizer } from "@tanstack/solid-virtual";
 import { invoke } from "@tauri-apps/api";
 import { For, Show, createMemo, createSignal, onMount } from "solid-js";
 import { type SetStoreFunction, reconcile } from "solid-js/store";
@@ -35,17 +31,14 @@ export default function GroupedTable(props: GroupedTableProps) {
     let scrollElement!: HTMLUListElement;
     let containerElement!: HTMLDivElement;
 
-    const virtualizerConfig = createMemo(() => {
-        return {
-            count: props.linkGroups.length ?? 0,
-            getScrollElement: () => scrollElement as Element | null,
-            estimateSize: (i: number) => estimateSize(props.linkGroups[i]),
-            getItemKey: (i: number) => props.linkGroups[i].id,
-        } as VirtualizerOptions<Element, Element>;
+    const virtualizer = createVirtualizer({
+        get count() {
+            return props.linkGroups.length ?? 0;
+        },
+        getScrollElement: () => scrollElement as Element | null,
+        estimateSize: (i: number) => estimateSize(props.linkGroups[i]),
+        getItemKey: (i: number) => props.linkGroups[i].id,
     });
-
-    // @ts-expect-error Tanstack type definitions aren't correct here
-    const virtualizer = createVirtualizer(() => virtualizerConfig());
 
     const { onDragEnter, onDragEnd } = useDragDropImpl(props);
 

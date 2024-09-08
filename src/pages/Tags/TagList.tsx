@@ -1,10 +1,9 @@
 import {
     VirtualItem,
     Virtualizer,
-    VirtualizerOptions,
     createVirtualizer,
 } from "@tanstack/solid-virtual";
-import { For, Match, Show, Switch, createMemo, createSignal } from "solid-js";
+import { For, Match, Show, Switch, createSignal } from "solid-js";
 import { addTag, removeTag } from "@/api/actions";
 import Button from "@/components/Button";
 import createDialog from "@/components/Dialog";
@@ -25,17 +24,14 @@ export default function TagList(props: {
 }) {
     let scrollElement: HTMLDivElement | undefined;
 
-    const virtualizerConfig = createMemo(() => {
-        return {
-            count: props.data.length,
-            getScrollElement: () => scrollElement as Element | null,
-            // eslint-disable-next-line @typescript-eslint/no-unused-vars
-            estimateSize: (_i: number) => ROW_HEIGHT,
-        } as VirtualizerOptions<Element, Element>;
+    const virtualizer = createVirtualizer({
+        get count() {
+            return props.data.length;
+        },
+        getScrollElement: () => scrollElement as Element | null,
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        estimateSize: (_i: number) => ROW_HEIGHT,
     });
-
-    // @ts-expect-error Tanstack types are not correct here
-    const virtualizer = createVirtualizer(() => virtualizerConfig());
 
     return (
         <div

@@ -2,10 +2,9 @@ import { revalidate } from "@solidjs/router";
 import {
     VirtualItem,
     Virtualizer,
-    VirtualizerOptions,
     createVirtualizer,
 } from "@tanstack/solid-virtual";
-import { For, Show, createEffect, createMemo, onMount } from "solid-js";
+import { For, Show, createEffect, onMount } from "solid-js";
 import { Portal } from "solid-js/web";
 import { removeLink } from "@/api/actions";
 import { CacheKeys } from "@/api/fetchers";
@@ -25,18 +24,14 @@ export default function SortTable(props: {
 
     let scrollElement!: HTMLDivElement;
 
-    const virtualizerConfig = createMemo(() => {
-        return {
-            count: props.data.length,
-            getScrollElement: () => scrollElement as Element | null,
-            // eslint-disable-next-line @typescript-eslint/no-unused-vars
-            estimateSize: (_i: number) => ROW_HEIGHT,
-            getItemKey: (index: number) => props.data[index]?.id,
-        } as VirtualizerOptions<Element, Element>;
+    const virtualizer = createVirtualizer({
+        get count() {
+            return props.data.length;
+        },
+        getScrollElement: () => scrollElement as Element | null,
+        estimateSize: () => ROW_HEIGHT,
+        getItemKey: (index: number) => props.data[index]?.id,
     });
-
-    //@ts-expect-error Tanstack type definitions aren't correct here
-    const virtualizer = createVirtualizer(() => virtualizerConfig());
 
     createEffect(() => {
         console.log(virtualizer.getVirtualItems().map((item) => item));
