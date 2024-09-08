@@ -4,7 +4,7 @@ import {
     Virtualizer,
     createVirtualizer,
 } from "@tanstack/solid-virtual";
-import { For, Show, createEffect, onMount } from "solid-js";
+import { For, Show, onMount } from "solid-js";
 import { Portal } from "solid-js/web";
 import { removeLink } from "@/api/actions";
 import { CacheKeys } from "@/api/fetchers";
@@ -33,16 +33,14 @@ export default function SortTable(props: {
         getItemKey: (index: number) => props.data[index]?.id,
     });
 
-    createEffect(() => {
-        console.log(virtualizer.getVirtualItems().map((item) => item));
-    });
-
     return (
         <div class="h-full w-full overflow-auto px-4 py-2" ref={scrollElement}>
             <div
                 class="overflow-hidden"
                 style={{
-                    height: `${virtualizer.getTotalSize() + ROW_HEIGHT}px`,
+                    height: `${virtualizer.getTotalSize()}px`,
+                    "min-height": "100%",
+                    contain: "strict",
                 }}
             >
                 <table
