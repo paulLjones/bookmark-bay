@@ -28,7 +28,7 @@ function TagAssignTable(props: {
     });
 
     const [activeTags, { refetch }] = createResource<string[], number>(
-        () => props.data.id,
+        () => props.data?.id,
         (id) => getTagsForLink(id),
     );
 
