@@ -28,6 +28,24 @@ type GroupedTableProps = {
 };
 
 export default function GroupedTable(props: GroupedTableProps) {
+    return (
+        <Show
+            when={props.linkGroups.length}
+            fallback={
+                <div>
+                    <p class="p-3">No links are currently loaded</p>
+                </div>
+            }
+        >
+            <VirtualList
+                linkGroups={props.linkGroups}
+                setLinkGroups={props.setLinkGroups}
+            />
+        </Show>
+    );
+}
+
+function VirtualList(props: GroupedTableProps) {
     let scrollElement!: HTMLUListElement;
     let containerElement!: HTMLDivElement;
 
@@ -47,77 +65,64 @@ export default function GroupedTable(props: GroupedTableProps) {
             class="relative w-full flex-grow flex-col overflow-scroll border-0"
             ref={scrollElement}
         >
-            <Show
-                when={props.linkGroups.length}
-                fallback={
-                    <div>
-                        <p class="p-3">No links are currently loaded</p>
-                    </div>
-                }
+            <SortableProvider
+                onDragEnter={onDragEnter}
+                onDragEnd={onDragEnd}
+                containerElement={() => containerElement}
             >
-                <SortableProvider
-                    onDragEnter={onDragEnter}
-                    onDragEnd={onDragEnd}
-                    containerElement={() => containerElement}
+                <div
+                    style={{
+                        height: `${virtualizer.getTotalSize()}px`,
+                        width: "100%",
+                        "min-height": "100%",
+                        position: "relative",
+                        contain: "strict",
+                    }}
+                    ref={containerElement}
                 >
-                    <div
-                        style={{
-                            height: `${virtualizer.getTotalSize()}px`,
-                            width: "100%",
-                            "min-height": "100%",
-                            position: "relative",
-                            contain: "strict",
-                        }}
-                        ref={containerElement}
+                    <For
+                        each={virtualizer
+                            .getVirtualItems()
+                            .filter(
+                                (virtualItem) =>
+                                    props.linkGroups[virtualItem.index],
+                            )}
                     >
-                        <For
-                            each={virtualizer
-                                .getVirtualItems()
-                                .filter(
-                                    (virtualItem) =>
-                                        props.linkGroups[virtualItem.index],
-                                )}
-                        >
-                            {(virtualItem) => (
-                                <GroupedTableItem
-                                    virtualItem={virtualItem}
+                        {(virtualItem) => (
+                            <GroupedTableItem
+                                virtualItem={virtualItem}
+                                linkGroup={props.linkGroups[virtualItem.index]}
+                            />
+                        )}
+                    </For>
+                    <SortableOverlay>
+                        {(draggedItem) => {
+                            return draggedItem.data?.type == "group" ? (
+                                <GroupedTableItemOverlay
+                                    groupNum={draggedItem.data.groupNum!}
                                     linkGroup={
-                                        props.linkGroups[virtualItem.index]
+                                        props.linkGroups.find(
+                                            (linkGroup) =>
+                                                linkGroup.id === draggedItem.id,
+                                        )!
                                     }
                                 />
-                            )}
-                        </For>
-                        <SortableOverlay>
-                            {(draggedItem) => {
-                                return draggedItem.data?.type == "group" ? (
-                                    <GroupedTableItemOverlay
-                                        groupNum={draggedItem.data.groupNum!}
-                                        linkGroup={
-                                            props.linkGroups.find(
-                                                (linkGroup) =>
-                                                    linkGroup.id ===
-                                                    draggedItem.id,
+                            ) : draggedItem.data?.type == "link" ? (
+                                <GroupedTableItemLinkOverlay
+                                    link={
+                                        props.linkGroups
+                                            .flatMap((group) => group.links)
+                                            .find(
+                                                (link) =>
+                                                    link.id === draggedItem.id,
                                             )!
-                                        }
-                                    />
-                                ) : draggedItem.data?.type == "link" ? (
-                                    <GroupedTableItemLinkOverlay
-                                        link={
-                                            props.linkGroups
-                                                .flatMap((group) => group.links)
-                                                .find(
-                                                    (link) =>
-                                                        link.id ===
-                                                        draggedItem.id,
-                                                )!
-                                        }
-                                    />
-                                ) : null;
-                            }}
-                        </SortableOverlay>
-                    </div>
-                </SortableProvider>
-            </Show>
+                                    }
+                                />
+                            ) : null;
+                        }}
+                    </SortableOverlay>
+                </div>
+            </SortableProvider>
         </ul>
     );
 }
