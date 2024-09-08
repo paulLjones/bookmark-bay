@@ -1,0 +1,54 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+dialog {
+    animation: fade-out 0.1s ease-out;
+    transition-behavior: allow-discrete;
+}
+
+dialog[open] {
+    animation: fade-in 0.1s ease-out;
+}
+
+dialog[open]::backdrop {
+    animation: backdrop-fade-in 0.1s ease-out forwards;
+}
+
+@keyframes fade-in {
+    0% {
+        opacity: 0;
+        transform: scale(0.2);
+        display: none;
+    }
+
+    100% {
+        opacity: 1;
+        transform: scale(1);
+        display: block;
+    }
+}
+
+@keyframes fade-out {
+    0% {
+        opacity: 1;
+        transform: scale(1);
+        display: block;
+    }
+
+    100% {
+        opacity: 0;
+        transform: scale(0.2);
+        display: none;
+    }
+}
+
+@keyframes backdrop-fade-in {
+    0% {
+        background-color: rgb(0 0 0 / 0%);
+    }
+
+    100% {
+        background-color: rgb(0 0 0 / 85%);
+    }
+}
