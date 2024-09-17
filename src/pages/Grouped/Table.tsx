@@ -1,17 +1,26 @@
-import { revalidate } from "@solidjs/router";
 import { type VirtualItem, createVirtualizer } from "@tanstack/solid-virtual";
-import { invoke } from "@tauri-apps/api";
-import { For, Show, createMemo, createSignal, onMount } from "solid-js";
-import { type SetStoreFunction, reconcile } from "solid-js/store";
+import {
+    type Accessor,
+    type Setter,
+    For,
+    JSX,
+    Show,
+    createContext,
+    createSignal,
+    useContext,
+} from "solid-js";
+import { type SetStoreFunction, produce } from "solid-js/store";
 import { Portal } from "solid-js/web";
 import { removeGroup, removeLink } from "@/api/actions";
-import { CacheKeys } from "@/api/fetchers";
 import createAddLinkDialog from "@/components/AddLinkDialog";
 import Button from "@/components/Button";
 import createTagAssignDialog from "@/components/TagAssignDialog";
-import { Link, LinkGroup } from "@/types";
+import type { Link, LinkGroup } from "@/types";
 import getLinkHeight from "@/utils/getLinkHeight";
-import { SortableOverlay, SortableProvider, createSortable } from "./Sortable";
+import createAutoScroller from "@/utils/createAutoScroller";
+import { invoke } from "@tauri-apps/api";
+import { CacheKeys } from "@/api/fetchers";
+import { revalidate } from "@solidjs/router";
 
 const LINK_HEIGHT = getLinkHeight() + 1;
 const PADDING = 16;
@@ -22,10 +31,45 @@ function estimateSize(linkGroup: LinkGroup): number {
     return (linkGroup.links.length + 1) * LINK_HEIGHT + STATIC_SPACING;
 }
 
+type GroupMove = { type: "group"; groupId: number; position: number };
+
+type LinkMove = {
+    type: "link";
+    linkId: number;
+    groupId: number;
+    positionInGroup: number;
+};
+
+type SwapType = GroupMove | LinkMove;
+
 type GroupedTableProps = {
     linkGroups: LinkGroup[];
     setLinkGroups: SetStoreFunction<LinkGroup[]>;
 };
+
+// We store the element to make sure we don't drop & miss the drag end event
+type DraggedData = { id: number; type: "group" | "link"; el: Element };
+
+type GroupedTableContext = {
+    setLinkGroups: SetStoreFunction<LinkGroup[]>;
+    draggedData: Accessor<DraggedData | undefined>;
+    setDraggedData: Setter<DraggedData | undefined>;
+    setLastSwap: Setter<SwapType | undefined>;
+    onAutoscrollerMove: (e: DragEvent) => void;
+    onDragEnd: (e: DragEvent) => void;
+};
+
+const GroupedTableContext = createContext<GroupedTableContext>(undefined);
+
+function useGroupedTableContext() {
+    const context = useContext(GroupedTableContext);
+
+    if (context === undefined) {
+        throw new Error("Context is not defined");
+    }
+
+    return context;
+}
 
 export default function GroupedTable(props: GroupedTableProps) {
     return (
@@ -49,6 +93,10 @@ function VirtualList(props: GroupedTableProps) {
     let scrollElement!: HTMLUListElement;
     let containerElement!: HTMLDivElement;
 
+    const { onAutoscrollerMove, cancelAutoscroller } = createAutoScroller(
+        () => containerElement,
+    );
+
     const virtualizer = createVirtualizer({
         get count() {
             return props.linkGroups.length ?? 0;
@@ -58,17 +106,18 @@ function VirtualList(props: GroupedTableProps) {
         getItemKey: (i: number) => props.linkGroups[i].id,
     });
 
-    const { onDragEnter, onDragEnd } = useDragDropImpl(props);
-
     return (
-        <ul
-            class="relative w-full flex-grow flex-col overflow-scroll border-0"
-            ref={scrollElement}
+        <GroupedTableContextProvider
+            setLinkGroups={(...args: unknown[]) => {
+                // @ts-expect-error solidjs-types
+                return props.setLinkGroups(...args);
+            }}
+            onAutoscrollerMove={onAutoscrollerMove}
+            cancelAutoscroller={cancelAutoscroller}
         >
-            <SortableProvider
-                onDragEnter={onDragEnter}
-                onDragEnd={onDragEnd}
-                containerElement={() => containerElement}
+            <ul
+                class="relative w-full flex-grow flex-col overflow-scroll border-0"
+                ref={scrollElement}
             >
                 <div
                     style={{
@@ -95,299 +144,73 @@ function VirtualList(props: GroupedTableProps) {
                             />
                         )}
                     </For>
-                    <SortableOverlay>
-                        {(draggedItem) => {
-                            return draggedItem.data?.type == "group" ? (
-                                <GroupedTableItemOverlay
-                                    groupNum={draggedItem.data.groupNum!}
-                                    linkGroup={
-                                        props.linkGroups.find(
-                                            (linkGroup) =>
-                                                linkGroup.id === draggedItem.id,
-                                        )!
-                                    }
-                                />
-                            ) : draggedItem.data?.type == "link" ? (
-                                <GroupedTableItemLinkOverlay
-                                    link={
-                                        props.linkGroups
-                                            .flatMap((group) => group.links)
-                                            .find(
-                                                (link) =>
-                                                    link.id === draggedItem.id,
-                                            )!
-                                    }
-                                />
-                            ) : null;
-                        }}
-                    </SortableOverlay>
                 </div>
-            </SortableProvider>
-        </ul>
+            </ul>
+        </GroupedTableContextProvider>
     );
-}
-
-function useDragDropImpl(props: GroupedTableProps) {
-    type GroupMove = { type: "group"; groupId: number; position: number };
-
-    type LinkMove = {
-        type: "link";
-        linkId: number;
-        groupId: number;
-        positionInGroup: number;
-    };
-
-    type SwapReturnType = GroupMove | LinkMove | null;
-
-    const groupIdToPosMap = createMemo(() => {
-        const records = new Map<number, number>();
-
-        props.linkGroups.forEach((group, index) =>
-            records.set(group.id, index),
-        );
-
-        return records;
-    });
-
-    const links = createMemo(() =>
-        props.linkGroups.flatMap((group) =>
-            group.links.map((link) => ({ ...link, groupId: group.id })),
-        ),
-    );
-
-    function swap(
-        draggableId: number,
-        droppableId: number | undefined,
-    ): SwapReturnType {
-        const draggableIsGroup = isGroup(draggableId);
-        const droppableIsGroup = isGroup(droppableId);
-
-        console.log(draggableId, droppableId);
-
-        if (
-            draggableIsGroup &&
-            (droppableIsGroup || droppableId == undefined)
-        ) {
-            return swapGroup();
-        }
-
-        if (droppableId == null) {
-            return null;
-        }
-
-        if (!draggableIsGroup && droppableIsGroup) {
-            return moveLinkToGroup(draggableId, droppableId);
-        } else {
-            return swapLink(draggableId, droppableId);
-        }
-
-        function isGroup(id: number | undefined): boolean {
-            if (id == undefined) {
-                return true;
-            }
-
-            return groupIdToPosMap().has(id);
-        }
-
-        function swapGroup(): GroupMove | null {
-            const draggablePos = groupIdToPosMap().get(draggableId);
-            const droppablePos =
-                droppableId != undefined
-                    ? groupIdToPosMap().get(droppableId)
-                    : undefined;
-
-            if (draggablePos == undefined) return null;
-
-            const groups = props.linkGroups.map((group) => ({ ...group }));
-
-            const draggable = groups.splice(draggablePos, 1)[0];
-
-            let swapPos;
-
-            if (droppablePos == undefined) {
-                swapPos = groups.length;
-            } else {
-                const offset = draggablePos >= droppablePos ? 0 : 1;
-                swapPos = droppablePos - offset;
-            }
-
-            groups.splice(swapPos, 0, draggable);
-
-            props.setLinkGroups(reconcile(groups));
-
-            return {
-                type: "group",
-                groupId: draggableId,
-                position: swapPos,
-            };
-        }
-
-        function moveLinkToGroup(
-            draggableId: number,
-            droppableId: number,
-        ): LinkMove | null {
-            const groups = props.linkGroups.map((group) => ({
-                ...group,
-                links: [...group.links],
-            }));
-
-            const link = links().find((link) => link.id === draggableId);
-            const fromGroup = groups.find(
-                (group) => group.id === link?.groupId,
-            );
-
-            const toGroup = groups.find((group) => group.id === droppableId);
-
-            if (
-                link == undefined ||
-                fromGroup == undefined ||
-                toGroup == undefined
-            )
-                return null;
-
-            const draggablePos = groupIdToPosMap().get(fromGroup.id);
-            const droppablePos = groupIdToPosMap().get(droppableId);
-
-            if (draggablePos == undefined || droppablePos == undefined)
-                return null;
-
-            fromGroup.links.splice(
-                fromGroup.links.findIndex((l) => l.id === link.id),
-                1,
-            );
-            toGroup.links.splice(0, 0, link);
-
-            props.setLinkGroups(reconcile(groups));
-
-            return {
-                type: "link",
-                groupId: toGroup.id,
-                linkId: link.id,
-                positionInGroup: 0,
-            };
-        }
-
-        function swapLink(
-            draggableId: number,
-            droppableId: number,
-        ): LinkMove | null {
-            const groups = props.linkGroups.map((group) => ({
-                ...group,
-                links: [...group.links],
-            }));
-
-            const draggableLink = links().find(
-                (link) => link.id === draggableId,
-            );
-            const droppableLink = links().find(
-                (link) => link.id === droppableId,
-            );
-
-            const draggableGroup = groups.find(
-                (group) => group.id === draggableLink?.groupId,
-            );
-            const droppableGroup = groups.find(
-                (group) => group.id === droppableLink?.groupId,
-            );
-
-            const draggablePos = draggableGroup?.links.findIndex(
-                (link) => link.id === draggableId,
-            );
-            const droppablePos = droppableGroup?.links.findIndex(
-                (link) => link.id === droppableId,
-            );
-
-            if (
-                draggableGroup == undefined ||
-                draggablePos == undefined ||
-                droppableGroup == undefined ||
-                droppablePos == undefined
-            )
-                return null;
-
-            if (draggableGroup != droppableGroup) {
-                moveLinkToGroup(draggableId, droppableGroup.id);
-                return swapLink(draggableId, droppableId);
-            }
-
-            const group = draggableGroup;
-
-            const draggable = group.links.splice(draggablePos, 1)[0];
-
-            const dropPosition = droppablePos;
-
-            group.links.splice(dropPosition, 0, draggable);
-
-            props.setLinkGroups(reconcile(groups));
-
-            return {
-                type: "link",
-                groupId: group.id,
-                linkId: draggableId,
-                positionInGroup: dropPosition,
-            };
-        }
-    }
-
-    const [lastSwapResult, setLastSwapResult] =
-        createSignal<SwapReturnType | null>(null);
-
-    function onDragEnter(draggableId: number, droppableId: number | undefined) {
-        setLastSwapResult(swap(draggableId, droppableId));
-    }
-
-    function onDragEnd() {
-        const result = lastSwapResult();
-
-        if (!result) return;
-
-        if (result.type === "group") {
-            invoke("reorder_group", {
-                ...result,
-            });
-        } else {
-            invoke("reorder_link", {
-                ...result,
-            });
-        }
-
-        revalidate(CacheKeys.LINK_GROUPS);
-    }
-
-    return { onDragEnter, onDragEnd } as const;
 }
 
 function GroupedTableItem(props: {
     virtualItem: VirtualItem<Element>;
     linkGroup: LinkGroup | undefined;
 }) {
-    let item!: HTMLLIElement;
-
     const { showModal, AddLinkDialog } = createAddLinkDialog();
+    const {
+        setLinkGroups,
+        draggedData,
+        setDraggedData,
+        onAutoscrollerMove,
+        onDragEnd,
+        setLastSwap,
+    } = useGroupedTableContext();
 
-    const { sortable, beingDragged } = createSortable(
-        () => props.linkGroup?.id,
-        () => ({ type: "group", groupNum: props.virtualItem.index }),
-    )!;
+    function dragHandler(e: DragEvent & { currentTarget: HTMLDivElement }) {
+        const { id, type } = draggedData()!;
 
-    onMount(() => {
-        sortable(item);
-    });
+        if (id === undefined || id === props.linkGroup!.id) {
+            return;
+        }
+
+        setLinkGroups(
+            produce(
+                linkGroupMutation(e, props.linkGroup!, id, type, setLastSwap),
+            ),
+        );
+    }
+
+    const beingDragged = () =>
+        draggedData()?.id === props.linkGroup!.id &&
+        draggedData()?.type === "group";
 
     return (
         <li
             class="w-full px-4 py-2"
-            ref={item}
             data-index={props.virtualItem.index}
             style={{
                 position: "absolute",
                 left: 0,
                 top: 0,
                 transform: `translateY(${props.virtualItem.start ?? 0}px)`,
-                opacity: beingDragged() ? 0.5 : 1,
             }}
         >
-            <div class="min-h-fit rounded border">
+            <div
+                class="min-h-fit rounded border"
+                style={{
+                    opacity: beingDragged() ? 0.5 : 1,
+                }}
+                draggable={true}
+                onDragOver={dragHandler}
+                onDrag={onAutoscrollerMove}
+                onDragEnd={onDragEnd}
+                onDragStart={(e) =>
+                    onGroupDragStart(
+                        e,
+                        props.linkGroup!,
+                        draggedData,
+                        setDraggedData,
+                    )
+                }
+            >
                 <div class="flex border-b border-gray-600 p-3">
                     <span class="flex flex-1 items-center">
                         Group: {props.linkGroup!.id}
@@ -431,57 +254,47 @@ function GroupedTableItem(props: {
     );
 }
 
-function GroupedTableItemOverlay(props: {
-    groupNum: number;
-    linkGroup: LinkGroup;
-}) {
-    return (
-        <li class="w-full select-none px-4 py-2">
-            <div class="min-h-fit rounded border">
-                <div class="flex border-b border-gray-600 p-3">
-                    <span class="flex flex-1 items-center">
-                        Group: {props.linkGroup.id}
-                    </span>
-
-                    <div class="flex gap-3">
-                        <Button color="blue" rounded>
-                            Add Link
-                        </Button>
-
-                        <Button color="red" rounded>
-                            Del
-                        </Button>
-                    </div>
-                </div>
-                <ul>
-                    <For each={props.linkGroup.links}>
-                        {(link) => (
-                            <GroupedTableItemLinkOverlay
-                                partialBorder={true}
-                                link={link}
-                            />
-                        )}
-                    </For>
-                </ul>
-            </div>
-        </li>
-    );
-}
-
 function GroupedTableItemLink(props: { link: Link }) {
     const { showModal, TagAssignDialog } = createTagAssignDialog();
+    const {
+        setLinkGroups,
+        draggedData,
+        setDraggedData,
+        onAutoscrollerMove,
+        onDragEnd,
+        setLastSwap,
+    } = useGroupedTableContext();
 
-    const { sortable, beingDragged } = createSortable(
-        () => props.link.id,
-        () => ({ type: "link" }),
-    )!;
+    function dragHandler(e: DragEvent & { currentTarget: HTMLLIElement }) {
+        const { id, type } = draggedData()!;
+
+        if (id === undefined || id === props.link.id || type === "group") {
+            return;
+        }
+
+        e.preventDefault();
+        e.stopPropagation();
+
+        setLinkGroups(produce(linkMutation(e, id, props.link, setLastSwap)));
+    }
+
+    const beingDragged = () =>
+        draggedData()?.id === props.link.id && draggedData()?.type === "link";
 
     return (
         <>
             <li
                 class="flex overflow-hidden border-b border-gray-600 last-of-type:border-b-0"
-                style={{ opacity: beingDragged() ? 0.5 : 1 }}
-                ref={sortable}
+                style={{
+                    opacity: beingDragged() ? 0.5 : 1,
+                }}
+                draggable={true}
+                onDragOver={dragHandler}
+                onDrag={onAutoscrollerMove}
+                onDragEnd={onDragEnd}
+                onDragStart={(e) =>
+                    onLinkDragStart(e, props.link, draggedData, setDraggedData)
+                }
             >
                 <div class="flex min-w-0 flex-1 flex-shrink-0 items-center overflow-hidden text-ellipsis whitespace-nowrap border-r border-gray-600 p-3">
                     {props.link.title}
@@ -528,36 +341,264 @@ function GroupedTableItemLink(props: { link: Link }) {
     );
 }
 
-function GroupedTableItemLinkOverlay(props: {
-    link: Link;
-    partialBorder?: boolean;
+function GroupedTableContextProvider(props: {
+    setLinkGroups: SetStoreFunction<LinkGroup[]>;
+    onAutoscrollerMove: (e: DragEvent) => void;
+    cancelAutoscroller: () => void;
+    children: JSX.Element;
 }) {
-    return (
-        <li
-            class={
-                "flex select-none border-gray-600 " +
-                (props.partialBorder ? "border-b" : "border")
-            }
-        >
-            <div class="flex min-w-0 flex-1 flex-shrink-0 items-center overflow-hidden text-ellipsis whitespace-nowrap border-r border-gray-600 p-3">
-                {props.link.title}
-            </div>
-            <div class="flex items-center justify-center gap-3 p-3">
-                <a
-                    class="rounded bg-blue-600 p-3 py-1 hover:bg-blue-400"
-                    href={props.link.uri}
-                >
-                    Open
-                </a>
-
-                <Button color="blue" rounded>
-                    Assign Tags
-                </Button>
-
-                <Button color="red" rounded>
-                    Del
-                </Button>
-            </div>
-        </li>
+    const [draggedData, setDraggedData] = createSignal<DraggedData | undefined>(
+        undefined,
     );
+
+    const [lastSwap, setLastSwap] = createSignal<SwapType | undefined>(
+        undefined,
+    );
+
+    function onDragEnd(e: DragEvent) {
+        props.cancelAutoscroller();
+
+        e.stopPropagation();
+        e.dataTransfer?.clearData();
+        setDraggedData(undefined);
+
+        const result = lastSwap();
+
+        if (!result) return;
+
+        if (result.type === "group") {
+            invoke("reorder_group", {
+                ...result,
+            });
+        } else {
+            invoke("reorder_link", {
+                ...result,
+            });
+        }
+
+        revalidate(CacheKeys.LINK_GROUPS);
+    }
+
+    return (
+        <GroupedTableContext.Provider
+            value={{
+                draggedData,
+                setDraggedData,
+                setLastSwap,
+                onDragEnd,
+                onAutoscrollerMove: (e) => props.onAutoscrollerMove(e),
+                setLinkGroups: (...args: unknown[]) => {
+                    // @ts-expect-error solidjs-types
+                    return props.setLinkGroups(...args);
+                },
+            }}
+        >
+            {props.children}
+        </GroupedTableContext.Provider>
+    );
+}
+
+function onGroupDragStart(
+    e: DragEvent & { currentTarget: HTMLElement },
+    linkGroup: LinkGroup,
+    draggedData: Accessor<DraggedData | undefined>,
+    setDraggedData: Setter<DraggedData | undefined>,
+) {
+    e.stopPropagation();
+
+    const el = e.currentTarget.cloneNode(true) as (typeof e)["currentTarget"];
+    el.classList.add("text-white");
+    el.style.width = `${e.currentTarget.clientWidth}px`;
+
+    document.body.appendChild(el);
+
+    e.dataTransfer?.setDragImage(el, e.offsetX, e.offsetY);
+    e.dataTransfer?.setData("application/x-group-id", linkGroup.id.toString());
+
+    if (draggedData()?.id !== linkGroup.id && draggedData()?.type !== "group") {
+        setDraggedData({
+            id: linkGroup.id,
+            type: "group",
+            el: e.currentTarget,
+        });
+    }
+
+    requestAnimationFrame(() => {
+        document.body.removeChild(el);
+    });
+}
+
+function onLinkDragStart(
+    e: DragEvent & { currentTarget: HTMLElement },
+    link: Link,
+    draggedData: Accessor<DraggedData | undefined>,
+    setDraggedData: Setter<DraggedData | undefined>,
+) {
+    e.stopPropagation();
+
+    const el = e.currentTarget.cloneNode(true) as (typeof e)["currentTarget"];
+    el.classList.add("text-white");
+    el.style.width = `${e.currentTarget.clientWidth}px`;
+
+    document.body.appendChild(el);
+
+    e.dataTransfer?.setDragImage(el, e.offsetX, e.offsetY);
+    e.dataTransfer?.setData("application/x-link-id", link.id.toString());
+
+    if (draggedData()?.id !== link.id && draggedData()?.type !== "link") {
+        setDraggedData({
+            id: link.id,
+            type: "link",
+            el: e.currentTarget,
+        });
+    }
+
+    requestAnimationFrame(() => {
+        document.body.removeChild(el);
+    });
+}
+
+function linkGroupMutation(
+    e: DragEvent & { currentTarget: Element },
+    linkGroup: LinkGroup,
+    id: number,
+    type: string,
+    setLastSwap: Setter<SwapType | undefined>,
+) {
+    return (linkGroups: LinkGroup[]) => {
+        if (type === "group") {
+            const groupIndex = linkGroups.findIndex((group) => group.id === id);
+
+            if (groupIndex == -1) {
+                throw new Error("Couldn't find group id: " + id);
+            }
+
+            const group = linkGroups.splice(groupIndex, 1)[0];
+
+            const thisIndex = linkGroups.findIndex(
+                (group) => group.id === linkGroup.id,
+            );
+
+            if (thisIndex == -1) {
+                throw new Error(
+                    "Couldn't find parent group for id: " + linkGroup.id,
+                );
+            }
+
+            const rect = e.currentTarget.getBoundingClientRect();
+
+            const insertBefore = e.clientY < rect.top + rect.height / 2;
+
+            const position = insertBefore ? thisIndex : thisIndex + 1;
+
+            linkGroups.splice(position, 0, group);
+
+            setLastSwap({
+                type: "group",
+                groupId: group.id,
+                position,
+            } as SwapType);
+        } else {
+            const groupWithLinksIndex = linkGroups.findIndex(
+                (group) =>
+                    group.links.findIndex((link) => link.id === id) != -1,
+            );
+
+            if (groupWithLinksIndex == -1) {
+                throw new Error("Couldn't find group with link id: " + id);
+            }
+
+            const group = linkGroups[groupWithLinksIndex];
+
+            if (group.id === linkGroup!.id) {
+                return;
+            }
+
+            const link = group.links.splice(
+                group.links.findIndex((link) => link.id === id),
+                1,
+            )[0];
+
+            const thisGroupIndex = linkGroups.findIndex(
+                (group) => group.id === linkGroup!.id,
+            );
+
+            if (thisGroupIndex == -1) {
+                throw new Error(
+                    "Couldn't find parent group for id: " + linkGroup!.id,
+                );
+            }
+
+            const thisGroup = linkGroups[thisGroupIndex];
+
+            thisGroup.links.unshift(link);
+
+            setLastSwap({
+                type: "link",
+                groupId: group.id,
+                linkId: link.id,
+                positionInGroup: 0,
+            } as SwapType);
+        }
+
+        e.preventDefault();
+        e.stopPropagation();
+    };
+}
+
+function linkMutation(
+    e: DragEvent & { currentTarget: Element },
+    id: number,
+    thisLink: Link,
+    setLastSwap: Setter<SwapType | undefined>,
+) {
+    return (linkGroups: LinkGroup[]) => {
+        e.stopPropagation();
+
+        const groupWithLinksIndex = linkGroups.findIndex(
+            (group) => group.links.findIndex((link) => link.id === id) != -1,
+        );
+
+        if (groupWithLinksIndex == -1) {
+            throw new Error("Couldn't find link id: " + id);
+        }
+
+        const link = (() => {
+            const group = linkGroups[groupWithLinksIndex];
+            const linkIndex = group.links.findIndex((link) => link.id === id);
+
+            return group.links.splice(linkIndex, 1)[0];
+        })();
+
+        const thisGroupIndex = linkGroups.findIndex(
+            (group) =>
+                group.links.findIndex((link) => link.id === thisLink.id) != -1,
+        );
+
+        if (thisGroupIndex == -1) {
+            throw new Error(
+                "Couldn't find parent group for id: " + thisLink.id,
+            );
+        }
+
+        const thisGroup = linkGroups[thisGroupIndex];
+        const thisIndex = thisGroup.links.findIndex(
+            (link) => link.id === thisLink.id,
+        );
+
+        const rect = e.currentTarget.getBoundingClientRect();
+
+        const insertBefore = e.clientY < rect.top + rect.height / 2;
+
+        const position = insertBefore ? thisIndex : thisIndex + 1;
+
+        thisGroup.links.splice(position, 0, link);
+
+        setLastSwap({
+            type: "link",
+            groupId: thisGroup.id,
+            linkId: link.id,
+            positionInGroup: position,
+        } as SwapType);
+    };
 }
