@@ -49,7 +49,9 @@ type SortableContextData = {
     activeDraggables: ActiveDraggables;
     onDragEnter?: DragEventHandler;
     onDragEnd?: VoidFunction;
-    onAutoscrollerMove: ReturnType<typeof createAutoScroller>;
+    onAutoscrollerMove: ReturnType<
+        typeof createAutoScroller
+    >["onAutoscrollerMove"];
 };
 
 type SortableContextType = [
@@ -67,7 +69,8 @@ type SortableProviderProps = ParentProps & {
 
 export function SortableProvider(props: SortableProviderProps) {
     const containerElement = () => props.containerElement();
-    const onAutoscrollerMove = createAutoScroller(containerElement);
+    const { onAutoscrollerMove, cancelAutoscroller } =
+        createAutoScroller(containerElement);
 
     const [store, setStore] = createStore<SortableContextData>({
         activeDraggables: [] as ActiveDraggables,
@@ -80,7 +83,10 @@ export function SortableProvider(props: SortableProviderProps) {
         overlayTransform: {},
         onDragEnter: (draggable, droppable) =>
             props.onDragEnter?.(draggable, droppable),
-        onDragEnd: () => props.onDragEnd?.(),
+        onDragEnd: () => {
+            cancelAutoscroller();
+            props.onDragEnd?.();
+        },
         onAutoscrollerMove,
     });
 
@@ -426,5 +432,8 @@ function createAutoScroller(containerElement: Accessor<HTMLElement>) {
         clearInterval(interval());
     });
 
-    return onPointerMove;
+    return {
+        onAutoscrollerMove: onPointerMove,
+        cancelAutoscroller: () => clearInterval(interval()),
+    } as const;
 }
