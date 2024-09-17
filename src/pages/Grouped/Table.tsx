@@ -162,7 +162,12 @@ function useDragDropImpl(props: GroupedTableProps) {
         const draggableIsGroup = isGroup(draggableId);
         const droppableIsGroup = isGroup(droppableId);
 
-        if (draggableIsGroup && droppableIsGroup) {
+        console.log(draggableId, droppableId);
+
+        if (
+            draggableIsGroup &&
+            (droppableIsGroup || droppableId == undefined)
+        ) {
             return swapGroup();
         }
 
@@ -200,7 +205,7 @@ function useDragDropImpl(props: GroupedTableProps) {
             let swapPos;
 
             if (droppablePos == undefined) {
-                swapPos = groups.length - 1;
+                swapPos = groups.length;
             } else {
                 const offset = draggablePos >= droppablePos ? 0 : 1;
                 swapPos = droppablePos - offset;
