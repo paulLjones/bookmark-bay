@@ -407,7 +407,7 @@ function onGroupDragStart(
     e.stopPropagation();
 
     const el = e.currentTarget.cloneNode(true) as (typeof e)["currentTarget"];
-    el.classList.add("text-white");
+    el.classList.add("bg-gray-900", "text-white");
     el.style.width = `${e.currentTarget.clientWidth}px`;
 
     document.body.appendChild(el);
@@ -437,7 +437,8 @@ function onLinkDragStart(
     e.stopPropagation();
 
     const el = e.currentTarget.cloneNode(true) as (typeof e)["currentTarget"];
-    el.classList.add("text-white");
+    el.classList.add("border", "bg-gray-900", "border-white", "text-white");
+    el.classList.remove("last-of-type:border-b-0");
     el.style.width = `${e.currentTarget.clientWidth}px`;
 
     document.body.appendChild(el);
