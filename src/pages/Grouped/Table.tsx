@@ -535,7 +535,7 @@ function linkGroupMutation(
 
             setLastSwap({
                 type: "link",
-                groupId: group.id,
+                groupId: linkGroup.id,
                 linkId: link.id,
                 positionInGroup: 0,
             } as SwapType);
